@@ -122,6 +122,7 @@ protected:
     void updateMetrics();
 
     AString mLogSessionId;
+    AString mOplusUserData;  // [PATCH OPLUSHDR]
     audio_source_t mAudioSource;
     privacy_sensitive_t mPrivacySensitive;
     video_source mVideoSource;
