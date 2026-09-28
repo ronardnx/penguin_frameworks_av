@@ -37,6 +37,9 @@
 #include "StagefrightRecorder.h"
 
 #include <algorithm>
+#include <mutex>
+#include <unordered_map>
+#include <media/stagefright/foundation/AString.h>
 
 #include <android-base/properties.h>
 #include <android/hardware/ICamera.h>
@@ -92,6 +95,10 @@
 #include <com_android_media_editing_flags.h>
 
 namespace android {
+
+// [PATCH OPLUSHDR] Store OplusUserData without altering StagefrightRecorder ABI
+static std::mutex sOplusUserDataLock;
+static std::unordered_map<const void*, AString> sOplusUserDataMap;
 
 static const float kTypicalDisplayRefreshingRate = 60.f;
 // display refresh rate drops on battery saver
@@ -180,6 +187,11 @@ StagefrightRecorder::StagefrightRecorder(const AttributionSourceState& client)
 StagefrightRecorder::~StagefrightRecorder() {
     ALOGV("Destructor");
     stop();
+
+    {
+        std::lock_guard<std::mutex> lock(sOplusUserDataLock);
+        sOplusUserDataMap.erase(this);
+    }
 
     if (mLooper != NULL) {
         mLooper->stop();
@@ -1202,7 +1214,8 @@ status_t StagefrightRecorder::setParameter(
         return setLogSessionId(value);
     } else if (key == "OplusUserData") {
         // [PATCH OPLUSHDR] Record and pass parameter to Muxer
-        mOplusUserData = value.c_str();
+        std::lock_guard<std::mutex> lock(sOplusUserDataLock);
+        sOplusUserDataMap[this] = value.c_str();
         return OK;
     } else if (key == "set-title") {
         return OK;
@@ -2549,8 +2562,12 @@ void StagefrightRecorder::setupMPEG4orWEBMMetaData(sp<MetaData> *meta) {
     }
 
     // [PATCH OPLUSHDR] Pass metadata to MPEG4Writer
-    if (!mOplusUserData.empty()) {
-        (*meta)->setCString(kKeyOplusUserData, mOplusUserData.c_str());
+    {
+        std::lock_guard<std::mutex> lock(sOplusUserDataLock);
+        auto it = sOplusUserDataMap.find(this);
+        if (it != sOplusUserDataMap.end() && !it->second.empty()) {
+            (*meta)->setCString(kKeyOplusUserData, it->second.c_str());
+        }
     }
 }
 
@@ -2794,6 +2811,11 @@ status_t StagefrightRecorder::close() {
 status_t StagefrightRecorder::reset() {
     ALOGV("reset");
     stop();
+
+    {
+        std::lock_guard<std::mutex> lock(sOplusUserDataLock);
+        sOplusUserDataMap.erase(this);
+    }
 
     // No audio or video source by default
     mAudioSource = (audio_source_t)AUDIO_SOURCE_CNT; // reset to invalid value
